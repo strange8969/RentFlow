@@ -1,0 +1,27 @@
+{
+  "version": "7",
+  "dialect": "sqlite",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "6",
+      "when": 1788352384432,
+      "tag": "0000_rapid_vengeance",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "6",
+      "when": 1788353097960,
+      "tag": "0001_damp_ben_grimm",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1788413231597,
+      "tag": "0002_breezy_selene",
+      "breakpoints": true
+    }
+  ]
+}
