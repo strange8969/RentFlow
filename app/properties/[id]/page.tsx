@@ -8,5 +8,5 @@ export default async function DetailRoute({ params }: { params: Promise<{ id: st
   const user = await getChatGPTUser();
   if (!user) return <AuthLanding mode="login" />;
   const { id } = await params;
-  return <EntityDetail kind="tenant" id={id} />;
+  return <EntityDetail kind="property" id={id} />;
 }
