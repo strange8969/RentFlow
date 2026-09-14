@@ -58,8 +58,7 @@ const fieldClass = "h-11 w-full rounded-xl border border-input bg-white px-3 tex
 const textAreaClass = "min-h-24 w-full rounded-xl border border-input bg-white px-3 py-2 text-base outline-none transition focus:border-primary focus:ring-2 focus:ring-primary/15";
 
 export default function RentFlowApp({ ownerName, ownerEmail, initialTenantId = null, initialPage = "dashboard" }: { ownerName: string; ownerEmail: string; initialTenantId?: string | null; initialPage?: PageKey }) {
-  const queryPage = typeof window === "undefined" ? null : new URLSearchParams(window.location.search).get("page") as PageKey | null;
-  const [page, setPage] = useState<PageKey>(initialTenantId ? "tenants" : queryPage && pages.some((item) => item.key === queryPage) ? queryPage : initialPage);
+  const [page, setPage] = useState<PageKey>(initialTenantId ? "tenants" : initialPage);
   const [selectedTenantId, setSelectedTenantId] = useState<string | null>(initialTenantId);
   const navigate = (next: PageKey) => { const path = next === "properties" ? "/properties" : next === "rooms" ? "/rooms" : `/?page=${next}`; setSelectedTenantId(null); setPage(next); if (window.location.pathname + window.location.search !== path) window.history.pushState({ page: next }, "", path); window.scrollTo({ top: 0, behavior: "instant" }); };
   const selectTenant = (tenantId: string) => { setSelectedTenantId(tenantId); setPage("tenants"); window.history.pushState({ tenantId }, "", `/tenants/${encodeURIComponent(tenantId)}`); window.scrollTo({ top: 0, behavior: "instant" }); };
