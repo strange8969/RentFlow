@@ -1,0 +1,13 @@
+{
+  "name": "RentFlow Rental Operations",
+  "short_name": "RentFlow",
+  "description": "Rental operations, billing and tenant ledger for landlords.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#f4f6fb",
+  "theme_color": "#6558d3",
+  "icons": [
+    { "src": "/app-icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
+  ]
+}

@@ -35,6 +35,6 @@ export async function GET() {
       q("SELECT * FROM move_out_settlements WHERE owner_key = ? ORDER BY settlement_date DESC"),
       one(db.prepare("SELECT * FROM settings WHERE owner_key = ?").bind(owner.key)),
     ]);
-    return Response.json({ schemaVersion: 4, exportedAt: new Date().toISOString(), owner: { name: owner.name, email: owner.email }, workspace: { name: owner.workspaceName, role: owner.role }, settings: savedSettings ?? defaultSettings(owner.key), properties, rooms, tenants, tenancies, rentRates, electricityRates, rentCharges, electricityReadings, electricityBills, otherCharges, payments, allocations, deposits, receipts, documents, auditLog, followUps, expenses, recurringExpenses, maintenanceIssues, roomAvailability, meterEvents, settlements });
+    return Response.json({ schemaVersion: 5, exportedAt: new Date().toISOString(), owner: { name: owner.name, email: owner.email }, workspace: { name: owner.workspaceName, role: owner.role }, settings: savedSettings ?? defaultSettings(owner.key), properties, rooms, tenants, tenancies, rentRates, electricityRates, rentCharges, electricityReadings, electricityBills, otherCharges, payments, allocations, deposits, receipts, documents, auditLog, followUps, expenses, recurringExpenses, maintenanceIssues, roomAvailability, meterEvents, settlements });
   } catch (error) { return jsonError(error); }
 }

@@ -10,11 +10,19 @@ test("all additive migrations apply and allocation triggers reject overpayment",
     database.exec(sql);
   }
   assert.equal(database.prepare("PRAGMA integrity_check").get().integrity_check, "ok");
-  assert.equal(database.prepare("SELECT count(*) AS count FROM sqlite_master WHERE type='table'").get().count, 27);
-  assert.equal(database.prepare("SELECT count(*) AS count FROM sqlite_master WHERE type='trigger'").get().count, 3);
+  assert.equal(database.prepare("SELECT count(*) AS count FROM sqlite_master WHERE type='table'").get().count, 44);
+  assert.equal(database.prepare("SELECT count(*) AS count FROM sqlite_master WHERE type='trigger'").get().count, 4);
 
   database.exec("INSERT INTO rent_charges (id, owner_key, tenancy_id, billing_month, amount_paise, due_date) VALUES ('charge','workspace','tenancy','2026-09',10000,'2026-09-10')");
+  database.exec("INSERT INTO payments (id,owner_key,tenancy_id,tenant_id,amount_paise,payment_date,mode,status,created_at,updated_at) VALUES ('payment1','workspace','tenancy','tenant',8000,'2026-09-10','cash','recorded','2026-09-10','2026-09-10')");
+  database.exec("INSERT INTO payments (id,owner_key,tenancy_id,tenant_id,amount_paise,payment_date,mode,status,created_at,updated_at) VALUES ('payment2','workspace','tenancy','tenant',3000,'2026-09-10','cash','recorded','2026-09-10','2026-09-10')");
   database.exec("INSERT INTO payment_allocations (id, owner_key, payment_id, charge_type, charge_id, amount_paise) VALUES ('a1','workspace','payment1','rent','charge',8000)");
   assert.throws(() => database.exec("INSERT INTO payment_allocations (id, owner_key, payment_id, charge_type, charge_id, amount_paise) VALUES ('a2','workspace','payment2','rent','charge',3000)"), /Allocation exceeds rent balance/);
-});
 
+  database.exec("INSERT INTO payments (id,owner_key,tenancy_id,tenant_id,amount_paise,payment_date,mode,status,created_at,updated_at) VALUES ('payment','workspace','tenancy','tenant',10000,'2026-09-10','cash','recorded','2026-09-10','2026-09-10')");
+  database.exec("INSERT INTO rent_charges (id, owner_key, tenancy_id, billing_month, amount_paise, due_date) VALUES ('charge2','workspace','tenancy','2026-10',10000,'2026-10-10')");
+  database.exec("INSERT INTO payment_allocations (id, owner_key, payment_id, charge_type, charge_id, amount_paise) VALUES ('a3','workspace','payment','rent','charge2',4000)");
+  database.exec("INSERT INTO payment_allocations (id, owner_key, payment_id, charge_type, charge_id, amount_paise) VALUES ('a4','workspace','payment','rent','charge2',5000)");
+  assert.equal(database.prepare("SELECT COUNT(*) count FROM payment_allocations WHERE payment_id='payment'").get().count, 2);
+  assert.throws(() => database.exec("INSERT INTO payment_allocations (id, owner_key, payment_id, charge_type, charge_id, amount_paise) VALUES ('a5','workspace','payment','rent','charge2',2000)"), /Allocation exceeds payment funds/);
+});

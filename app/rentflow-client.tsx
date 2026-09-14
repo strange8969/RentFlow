@@ -30,9 +30,11 @@ import { combinedBillSummary } from "./billing-summary";
 import { nextAvailableReadingMonth } from "./meter-readings";
 import { AdvancedDashboard } from "./advanced-dashboard";
 import { calculateMonthlyRent } from "./rent-calculations";
+import { OperationsCenter } from "./operations-center";
 
 type Row = Record<string, any>;
 type DataState = {
+  workspace?: Row;
   settings: Row; properties: Row[]; rooms: Row[]; tenants: Row[]; tenancies: Row[];
   rentRateHistory: Row[]; electricityRateHistory: Row[]; rentCharges: Row[]; electricityReadings: Row[];
   electricityBills: Row[]; otherCharges: Row[]; payments: Row[]; allocations: Row[]; deposits: Row[];
@@ -40,11 +42,11 @@ type DataState = {
   followUps: Row[]; expenses: Row[]; recurringExpenses: Row[]; maintenanceIssues: Row[];
   roomAvailability: Row[]; meterEvents: Row[]; settlements: Row[];
 };
-type PageKey = "dashboard" | "properties" | "rooms" | "tenants" | "rent" | "electricity" | "payments" | "expenses" | "maintenance" | "reports" | "documents" | "settings";
+type PageKey = "dashboard" | "operations" | "properties" | "rooms" | "tenants" | "rent" | "electricity" | "payments" | "expenses" | "maintenance" | "reports" | "documents" | "settings";
 type DialogKey = "property" | "room" | "tenant" | "tenancy" | "payment" | "credit" | "reading" | "other" | "deposit" | "rate" | "electricity_rate" | "meter" | "followup" | "expense" | "recurring" | "maintenance" | "maintenance_update" | "settlement" | "settlement_view" | "notice" | "moveout" | "upload" | "settings" | "erase" | "bill" | "ledger" | null;
 
 const pages: { key: PageKey; label: string; icon: typeof Home }[] = [
-  { key: "dashboard", label: "Dashboard", icon: LayoutDashboard }, { key: "properties", label: "Properties", icon: Building2 },
+  { key: "dashboard", label: "Dashboard", icon: LayoutDashboard }, { key: "operations", label: "Operations", icon: CalendarDays }, { key: "properties", label: "Properties", icon: Building2 },
   { key: "rooms", label: "Rooms", icon: Home }, { key: "tenants", label: "Tenants", icon: UsersRound },
   { key: "rent", label: "Rent", icon: IndianRupee }, { key: "electricity", label: "Electricity", icon: Zap },
   { key: "payments", label: "Payments", icon: WalletCards }, { key: "expenses", label: "Expenses", icon: ReceiptText },
@@ -79,6 +81,18 @@ export default function RentFlowApp({ ownerName, ownerEmail, initialTenantId = n
     finally { setLoading(false); }
   }, []);
   useEffect(() => { load(); }, [load]);
+  useEffect(() => {
+    const token = new URLSearchParams(window.location.search).get("invite");
+    if (!token) return;
+    (async () => {
+      try {
+        const response = await fetch("/api/operations", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "accept_workspace_invitation", requestKey: `invite:${token}`, payload: { token } }) });
+        const body = await response.json(); if (!response.ok) throw new Error(body.error || "Invitation could not be accepted.");
+        await fetch("/api/workspaces", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ workspaceId: body.result.workspaceId }) });
+        window.history.replaceState({}, "", "/"); window.location.reload();
+      } catch (reason) { toast.error(reason instanceof Error ? reason.message : "Invitation could not be accepted."); }
+    })();
+  }, []);
   useEffect(() => { const syncRoute = () => { const match = window.location.pathname.match(/^\/tenants\/([^/]+)$/); if (match) { setPage("tenants"); setSelectedTenantId(decodeURIComponent(match[1])); } else setSelectedTenantId(null); }; window.addEventListener("popstate", syncRoute); return () => window.removeEventListener("popstate", syncRoute); }, []);
   const open = (key: DialogKey, value: Row = {}) => { setContext(value); setDialog(key); };
   const runAction = async (action: string, payload: Row, success: string) => {
@@ -101,13 +115,14 @@ export default function RentFlowApp({ ownerName, ownerEmail, initialTenantId = n
         <SidebarContent><SidebarGroup><SidebarGroupContent><SidebarMenu className="gap-1 px-2">
           <SidebarNavigation page={page} navigate={navigate} />
         </SidebarMenu></SidebarGroupContent></SidebarGroup></SidebarContent>
-        <SidebarFooter className="p-4"><div className="rounded-2xl border border-white/10 bg-white/[.04] p-3"><div className="flex items-center gap-2 text-sm font-medium text-white"><ShieldCheck className="size-4 text-emerald-400" /> Protected workspace</div><div className="mt-1 truncate text-xs text-slate-400">{data?.workspace?.name || ownerEmail}</div></div><a href="/signout-with-chatgpt?return_to=/" target="_top" className="flex h-10 items-center gap-2 rounded-xl px-3 text-sm text-slate-300 hover:bg-white/10"><LogOut className="size-4" /> Sign out</a></SidebarFooter>
+        <SidebarFooter className="p-4"><div className="rounded-2xl border border-white/10 bg-white/[.04] p-3"><div className="flex items-center gap-2 text-sm font-medium text-white"><ShieldCheck className="size-4 text-emerald-400" /> Protected workspace</div><div className="mt-1 truncate text-xs text-slate-400">{data?.workspace?.name || ownerEmail}</div></div><a href="/signout-with-chatgpt?return_to=/" target="_top" onClick={() => navigator.serviceWorker?.controller?.postMessage("CLEAR_SENSITIVE_CACHES")} className="flex h-10 items-center gap-2 rounded-xl px-3 text-sm text-slate-300 hover:bg-white/10"><LogOut className="size-4" /> Sign out</a></SidebarFooter>
       </Sidebar>
       <SidebarInset className="rentflow-app min-w-0 bg-[#f4f6fb] pb-20 md:pb-0">
         <header data-no-print className="sticky top-0 z-20 flex h-[74px] items-center gap-3 border-b border-slate-200/80 bg-white/90 px-4 backdrop-blur-xl md:px-7">
           <SidebarTrigger className="size-10 md:hidden" />
           <div className="min-w-0"><h1 className="truncate text-lg font-bold text-slate-900">{activeLabel}</h1><p className="hidden text-xs text-slate-500 sm:block">{page === "dashboard" ? `Welcome back, ${firstName(ownerName)}` : pageHint(page)}</p></div>
           <div className="ml-auto flex items-center gap-2">
+            <WorkspacePicker />
             <div className="relative hidden lg:block"><Search className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-slate-400" /><Input aria-label="Search RentFlow" value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search tenant, room, receipt…" className="h-10 w-72 rounded-xl bg-slate-50 pl-9" />{search && <SearchPopover results={searchResults} onOpen={(r: Row) => { setSearch(""); if (r.type === "tenant") selectTenant(r.row.id); else navigate(r.page); }} />}</div>
             <Button variant="outline" className="hidden h-10 rounded-xl xl:flex" onClick={() => open("reading")}><Gauge /> Meter reading</Button>
             <Button aria-label="Record payment" className="h-10 rounded-xl shadow-sm" onClick={() => open("payment")}><Plus /> <span className="hidden sm:inline">Record payment</span></Button>
@@ -117,6 +132,7 @@ export default function RentFlowApp({ ownerName, ownerEmail, initialTenantId = n
           {loading ? <LoadingView /> : error ? <ErrorView error={error} retry={load} /> : <>
             {page !== "settings" && !(page === "tenants" && selectedTenantId) && <PeriodBar month={month} setMonth={setMonth} changeMonth={changeMonth} properties={data.properties} propertyFilter={propertyFilter} setPropertyFilter={setPropertyFilter} onSearch={() => open("ledger", { searchOnly: true })} />}
             {page === "dashboard" && <Dashboard data={data} model={model} month={month} open={open} setPage={setPage} runAction={runAction} />}
+            {page === "operations" && <OperationsCenter data={data} month={month} propertyFilter={propertyFilter} navigate={navigate} reloadApp={load} />}
             {page === "properties" && <PropertiesPage data={data} model={model} open={open} runAction={runAction} />}
             {page === "rooms" && <RoomsPage data={data} model={model} open={open} runAction={runAction} />}
             {page === "tenants" && <TenantsPage data={data} model={model} open={open} runAction={runAction} selectedTenantId={selectedTenantId} selectTenant={selectTenant} closeTenant={closeTenant} />}
@@ -386,7 +402,7 @@ function DialogFields({ kind, context, data, month, model }: any) {
   if (kind === "settlement") return <><input type="hidden" name="tenancyId" value={context.tenancyId} /><Grid><Field label="Settlement / move-out date" name="settlementDate" type="date" required defaultValue={today()} /><MoneyField label="Deposit deduction applied to dues" name="deduction" /></Grid><TextField label="Settlement notes" name="notes" /><ReviewNote>RentFlow calculates open charges, unapplied credit, deposit refund and remaining debt, then freezes a printable snapshot.</ReviewNote></>;
   if (kind === "notice") return <><input type="hidden" name="tenancyId" value={context.tenancyId} /><Grid><Field label="Notice date" name="noticeDate" type="date" required defaultValue={today()} /><Field label="Planned move-out date" name="plannedMoveOutDate" type="date" /></Grid></>;
   if (kind === "moveout") return <><input type="hidden" name="tenancyId" value={context.tenancyId} /><Field label="Move-out date" name="moveOutDate" type="date" required defaultValue={today()} /><ReviewNote>Before closing, finalize the meter reading, review open charges, and record deposit deductions/refunds. Closing frees the room and retains every historical record.</ReviewNote></>;
-  if (kind === "upload") return <><Grid><SelectField label="Category" name="type" options={[["tenant_id", "Tenant ID"], ["rent_agreement", "Rent agreement"], ["police_verification", "Police verification"], ["tenant_photo", "Tenant photo"], ["meter_photo", "Meter photo"], ["payment_proof", "Payment proof"], ["receipt_attachment", "Receipt attachment"], ["property_document", "Property document"], ["other", "Other"]]} /><SelectField label="Related tenant" name="tenantId" defaultValue={context.tenantId} options={[["", "General / none"], ...data.tenants.map((t: Row) => [t.id, t.full_name])]} /></Grid><label className="block"><span className="mb-1.5 block text-sm font-semibold text-slate-700">File</span><input className={`${fieldClass} h-auto py-2`} type="file" name="file" required accept=".pdf,.jpg,.jpeg,.png,.webp,.txt,.docx" /></label><ReviewNote>Files are private, limited to {data.settings.max_file_size_mb || 20} MB, and never exposed through a public storage URL.</ReviewNote></>;
+  if (kind === "upload") return <><Grid><SelectField label="Category" name="type" options={[["tenant_id", "Tenant ID"], ["rent_agreement", "Rent agreement"], ["police_verification", "Police verification"], ["tenant_photo", "Tenant photo"], ["meter_photo", "Meter photo"], ["inspection_photo", "Inspection photo"], ["payment_proof", "Payment proof"], ["receipt_attachment", "Receipt attachment"], ["property_document", "Property document"], ["other", "Other"]]} /><SelectField label="Related tenant" name="tenantId" defaultValue={context.tenantId} options={[["", "General / none"], ...data.tenants.map((t: Row) => [t.id, t.full_name])]} /></Grid><label className="block"><span className="mb-1.5 block text-sm font-semibold text-slate-700">File or camera photo</span><input className={`${fieldClass} h-auto py-2`} type="file" name="file" required accept=".pdf,.jpg,.jpeg,.png,.webp,.txt,.docx,image/*" /></label><ReviewNote>On mobile, choose Camera to capture inspection evidence. Files are private, limited to {data.settings.max_file_size_mb || 20} MB, and never exposed through a public storage URL.</ReviewNote></>;
   if (kind === "settings") { const s = context; return <><Grid><Field label="Landlord / display name" name="landlordName" defaultValue={s.landlord_name} /><Field label="Timezone" name="timezone" defaultValue={s.timezone || "Asia/Kolkata"} /><Field label="Date format" name="dateFormat" defaultValue={s.date_format || "dd MMM yyyy"} /><Field label="Default rent due day" name="defaultRentDueDay" type="number" inputMode="decimal" min="1" max="28" defaultValue={s.default_rent_due_day || 10} /><Field label="Bill prefix" name="billPrefix" defaultValue={s.bill_prefix || "RF-BILL"} /><Field label="Receipt prefix" name="receiptPrefix" defaultValue={s.receipt_prefix || "RF-RCPT"} /><Field label="UPI ID" name="upiId" defaultValue={s.upi_id} /><MoneyField label="Default electricity ₹/unit" name="defaultElectricityRate" defaultValue={fromPaise(s.default_electricity_rate_paise)} /><MoneyField label="Default electricity fixed" name="defaultElectricityFixedCharge" defaultValue={fromPaise(s.default_electricity_fixed_charge_paise)} /><Field label="Max file size (MB)" name="maxFileSizeMb" type="number" inputMode="decimal" min="1" max="100" defaultValue={s.max_file_size_mb || 20} /></Grid><TextField label="Bank / payment instructions" name="paymentInstructions" defaultValue={s.payment_instructions} /><TextField label="Bill footer / contact" name="billFooter" defaultValue={s.bill_footer} /></>; }
   if (kind === "erase") return <><div className="rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-800"><b>This permanently deletes:</b> properties, rooms, tenants, tenancies, rates, charges, readings, bills, payments, allocations, deposits, receipts, audit history, settings and private file copies.</div><Field label="Type DELETE ALL RENTFLOW DATA" name="confirmation" required autoComplete="off" /></>;
   return null;
@@ -528,6 +544,13 @@ function SearchPopover({ results, onOpen }: any) {
   return <div className="absolute right-0 top-12 z-50 w-[380px] rounded-2xl border border-slate-200 bg-white p-2 shadow-xl"><div className="px-3 py-2 text-xs font-semibold uppercase tracking-wide text-slate-400">Search results</div>{results.length ? results.map((r: Row, i: number) => <button className="flex w-full items-center justify-between rounded-xl px-3 py-2 text-left hover:bg-slate-50" key={`${r.type}-${i}`} onClick={() => onOpen(r)}><div><div className="text-sm font-semibold">{r.title}</div><div className="text-xs text-slate-500">{r.subtitle}</div></div><span className="text-xs capitalize text-primary">{r.type}</span></button>) : <div className="px-3 py-5 text-sm text-slate-500">No matching saved records.</div>}</div>;
 }
 
+function WorkspacePicker() {
+  const [state, setState] = useState<Row | null>(null);
+  useEffect(() => { fetch("/api/workspaces", { cache: "no-store" }).then((response) => response.ok ? response.json() : null).then(setState).catch(() => undefined); }, []);
+  if (!state || state.memberships?.length < 2) return null;
+  return <select aria-label="Active workspace" className="h-10 max-w-28 rounded-xl border border-slate-200 bg-white px-2 text-sm font-semibold sm:max-w-48 sm:px-3" value={state.activeWorkspaceId} onChange={async (event) => { await fetch("/api/workspaces", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ workspaceId: event.target.value }) }); navigator.serviceWorker?.controller?.postMessage("CLEAR_SENSITIVE_CACHES"); window.location.reload(); }}>{state.memberships.map((membership: Row) => <option value={membership.workspace_id} key={membership.workspace_id}>{membership.name} · {titleCase(membership.role)}</option>)}</select>;
+}
+
 function globalSearch(data: DataState, q: string) {
   const s = q.trim().toLowerCase(); if (!s) return []; const out: Row[] = [];
   data.tenants.filter((t) => `${t.full_name} ${t.phone}`.toLowerCase().includes(s)).slice(0, 4).forEach((t) => out.push({ type: "tenant", title: t.full_name, subtitle: t.phone || "Tenant", row: t, page: "tenants" }));
@@ -599,7 +622,7 @@ function firstName(n: string) { return n.split(/[ @]/)[0] || "Owner"; }
 function titleCase(s: string) { return String(s || "").replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase()); }
 function formatBytes(n: number) { if (n < 1024) return `${n} B`; if (n < 1048576) return `${(n / 1024).toFixed(1)} KB`; return `${(n / 1048576).toFixed(1)} MB`; }
 function tenancyLabel(t: Row, m: any) { return `${m.tenantById[t.tenant_id]?.full_name} · ${m.propertyById[t.property_id]?.name} / ${m.roomById[t.room_id]?.room_number}`; }
-function pageHint(p: PageKey) { const hints: Row = { properties: "Buildings and billing defaults", rooms: "Units, meters and occupancy", tenants: "People, tenancies and statements", rent: "Idempotent monthly charges", electricity: "Meter readings and frozen bills", payments: "Receipts, allocations and reversals", expenses: "Operating costs and recurring templates", maintenance: "Repairs, vendors and completion costs", reports: "Saved-data summaries and exports", documents: "Private evidence vault", settings: "Billing, payment and data controls" }; return hints[p] || ""; }
+function pageHint(p: PageKey) { const hints: Row = { operations: "Closing, bulk work and reconciliations", properties: "Buildings and billing defaults", rooms: "Units, meters and occupancy", tenants: "People, tenancies and statements", rent: "Idempotent monthly charges", electricity: "Meter readings and frozen bills", payments: "Receipts, allocations and reversals", expenses: "Operating costs and recurring templates", maintenance: "Repairs, vendors and completion costs", reports: "Saved-data summaries and exports", documents: "Private evidence vault", settings: "Billing, payment and data controls" }; return hints[p] || ""; }
 function parseCsv(text: string) {
   const records: string[][] = []; let row: string[] = []; let value = ""; let quoted = false;
   for (let i = 0; i < text.length; i += 1) { const char = text[i]; const next = text[i + 1]; if (char === '"' && quoted && next === '"') { value += '"'; i += 1; } else if (char === '"') quoted = !quoted; else if (char === "," && !quoted) { row.push(value.trim()); value = ""; } else if ((char === "\n" || char === "\r") && !quoted) { if (char === "\r" && next === "\n") i += 1; row.push(value.trim()); if (row.some(Boolean)) records.push(row); row = []; value = ""; } else value += char; }

@@ -1,4 +1,5 @@
-import { ApiError, audit, database, id, int, isoDate, jsonError, month, now, num, one, requireOwner, rows, safeJson, str, bucket } from "../_lib";
+import { ApiError, audit, database, id, int, isoDate, jsonError, month, now, num, one, requireOwner, requirePermission, rows, safeJson, str, bucket } from "../_lib";
+import type { Permission } from "../../permissions";
 import { calculateMonthlyRent } from "../../rent-calculations";
 
 export const dynamic = "force-dynamic";
@@ -14,6 +15,8 @@ export async function POST(request: Request) {
     const body = safeJson(await request.json());
     const action = str(body.action, "Action", true);
     const p = safeJson(body.payload);
+    const permission = ACTION_PERMISSIONS[action];
+    if (permission) requirePermission(owner, permission);
     let result: unknown;
 
     switch (action) {
@@ -64,6 +67,7 @@ export async function POST(request: Request) {
         const entityId = id("room");
         const propertyId = str(p.propertyId, "Property", true);
         await owned(db, "properties", propertyId, owner.key);
+        await assertRoomEntitlement(db, owner.key);
         const roomNumber = str(p.roomNumber, "Room number", true);
         const status = str(p.status, "Status") || "vacant";
         if (!new Set(["vacant", "reserved", "maintenance"]).has(status)) throw new ApiError(400, "New rooms may be Vacant, Reserved, or Maintenance.");
@@ -162,8 +166,8 @@ export async function POST(request: Request) {
         ]); result = { id: entityId }; break;
       }
       case "update_rent_rate": {
-        const tenancyId = str(p.tenancyId, "Tenancy", true); await owned(db, "tenancies", tenancyId, owner.key);
-        const effectiveFrom = isoDate(p.effectiveFrom, "Effective date"); const amount = money(p.amountPaise, "Monthly rent"); const rateId = id("rr"); const at = now();
+        const tenancyId = str(p.tenancyId, "Tenancy", true); const tenancy = await owned(db, "tenancies", tenancyId, owner.key);
+        const effectiveFrom = isoDate(p.effectiveFrom, "Effective date"); await assertFinancialPeriodOpen(db, owner.key, effectiveFrom.slice(0, 7), String(tenancy.property_id)); const amount = money(p.amountPaise, "Monthly rent"); const rateId = id("rr"); const at = now();
         await db.batch([
           db.prepare("UPDATE rent_rate_history SET effective_to=date(?, '-1 day'), updated_at=? WHERE owner_key=? AND tenancy_id=? AND effective_from<? AND (effective_to IS NULL OR effective_to>=?)").bind(effectiveFrom, at, owner.key, tenancyId, effectiveFrom, effectiveFrom),
           db.prepare("INSERT INTO rent_rate_history (id, owner_key, tenancy_id, amount_paise, effective_from, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)").bind(rateId, owner.key, tenancyId, amount, effectiveFrom, at, at),
@@ -171,8 +175,8 @@ export async function POST(request: Request) {
         ]); result = { id: rateId }; break;
       }
       case "update_electricity_rate": {
-        const tenancyId = str(p.tenancyId, "Tenancy", true); await owned(db, "tenancies", tenancyId, owner.key);
-        const effectiveFrom = isoDate(p.effectiveFrom, "Effective date"); const rate = money(p.ratePaisePerUnit, "Electricity rate", true); const fixed = money(p.fixedChargePaise ?? 0, "Fixed charge", true); const rateId = id("er"); const at = now();
+        const tenancyId = str(p.tenancyId, "Tenancy", true); const tenancy = await owned(db, "tenancies", tenancyId, owner.key);
+        const effectiveFrom = isoDate(p.effectiveFrom, "Effective date"); await assertFinancialPeriodOpen(db, owner.key, effectiveFrom.slice(0, 7), String(tenancy.property_id)); const rate = money(p.ratePaisePerUnit, "Electricity rate", true); const fixed = money(p.fixedChargePaise ?? 0, "Fixed charge", true); const rateId = id("er"); const at = now();
         await db.batch([
           db.prepare("UPDATE electricity_rate_history SET effective_to=date(?, '-1 day'), updated_at=? WHERE owner_key=? AND tenancy_id=? AND effective_from<? AND (effective_to IS NULL OR effective_to>=?)").bind(effectiveFrom, at, owner.key, tenancyId, effectiveFrom, effectiveFrom),
           db.prepare("INSERT INTO electricity_rate_history (id, owner_key, tenancy_id, rate_paise_per_unit, fixed_charge_paise, effective_from, tariff_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, '{}', ?, ?)").bind(rateId, owner.key, tenancyId, rate, fixed, effectiveFrom, at, at),
@@ -181,6 +185,7 @@ export async function POST(request: Request) {
       }
       case "generate_rent": {
         const billingMonth = month(p.billingMonth); const propertyId = str(p.propertyId, "Property");
+        await assertFinancialPeriodOpen(db, owner.key, billingMonth, propertyId || null);
         const periodStart = `${billingMonth}-01`; const periodEnd = monthEnd(billingMonth); const params: unknown[] = [owner.key, periodEnd, periodStart];
         let query = "SELECT * FROM tenancies WHERE owner_key=? AND rent_start_date<=? AND (move_out_date IS NULL OR move_out_date>=?)";
         if (propertyId) { query += " AND property_id=?"; params.push(propertyId); }
@@ -200,6 +205,7 @@ export async function POST(request: Request) {
       }
       case "record_electricity": {
         const tenancyId = str(p.tenancyId, "Tenancy", true); const tenancy = await owned(db, "tenancies", tenancyId, owner.key); const billingMonth = month(p.billingMonth);
+        await assertFinancialPeriodOpen(db, owner.key, billingMonth, String(tenancy.property_id));
         const previous = num(p.previousReading, "Previous reading", 0); const current = num(p.currentReading, "Current reading", 0);
         if (current < previous) throw new ApiError(400, "Current reading cannot be lower than the previous reading. Use a meter reset workflow for replacements.");
         const existing = await one(db.prepare("SELECT id FROM electricity_readings WHERE tenancy_id=? AND billing_month=?").bind(tenancyId, billingMonth));
@@ -224,6 +230,7 @@ export async function POST(request: Request) {
       }
       case "finalize_electricity": {
         const readingId = str(p.readingId, "Reading", true); const reading = await owned(db, "electricity_readings", readingId, owner.key);
+        const tenancy = await owned(db, "tenancies", String(reading.tenancy_id), owner.key); await assertFinancialPeriodOpen(db, owner.key, String(reading.billing_month), String(tenancy.property_id));
         if (reading.status === "finalized") throw new ApiError(409, "This reading is already finalized.");
         const rate = await one<{ rate_paise_per_unit: number; fixed_charge_paise: number }>(db.prepare("SELECT rate_paise_per_unit, fixed_charge_paise FROM electricity_rate_history WHERE owner_key=? AND tenancy_id=? AND effective_from<=? ORDER BY effective_from DESC LIMIT 1").bind(owner.key, reading.tenancy_id, monthEnd(String(reading.billing_month))));
         if (!rate) throw new ApiError(400, "Set an electricity rate first.");
@@ -232,9 +239,9 @@ export async function POST(request: Request) {
         result = { id: billId, totalPaise: total }; break;
       }
       case "create_other_charge": {
-        const tenancyId = str(p.tenancyId, "Tenancy", true); await owned(db, "tenancies", tenancyId, owner.key); const entityId = id("other"); const amount = money(p.amountPaise, "Amount", false, true);
+        const tenancyId = str(p.tenancyId, "Tenancy", true); const tenancy = await owned(db, "tenancies", tenancyId, owner.key); const chargeDate = isoDate(p.chargeDate, "Charge date"); await assertFinancialPeriodOpen(db, owner.key, chargeDate.slice(0, 7), String(tenancy.property_id)); const entityId = id("other"); const amount = money(p.amountPaise, "Amount", false, true);
         if (amount === 0) throw new ApiError(400, "Amount cannot be zero.");
-        await db.batch([db.prepare("INSERT INTO other_charges (id, owner_key, tenancy_id, charge_date, charge_type, amount_paise, description, reversed, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?)").bind(entityId, owner.key, tenancyId, isoDate(p.chargeDate, "Charge date"), str(p.chargeType, "Charge type", true), amount, str(p.description, "Description", true), now(), now()), audit(db, owner, amount < 0 ? "credit.created" : "other_charge.created", "other_charge", entityId, str(p.description, "Description", true))]);
+        await db.batch([db.prepare("INSERT INTO other_charges (id, owner_key, tenancy_id, charge_date, charge_type, amount_paise, description, reversed, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?)").bind(entityId, owner.key, tenancyId, chargeDate, str(p.chargeType, "Charge type", true), amount, str(p.description, "Description", true), now(), now()), audit(db, owner, amount < 0 ? "credit.created" : "other_charge.created", "other_charge", entityId, str(p.description, "Description", true))]);
         result = { id: entityId }; break;
       }
       case "record_payment": {
@@ -256,7 +263,7 @@ export async function POST(request: Request) {
         const available = Number(payment.amount_paise) - Number(allocatedRow?.amount || 0); if (available <= 0) throw new ApiError(409, "This payment has no unapplied credit.");
         const requested = Array.isArray(p.allocations) ? p.allocations : []; const resolved = await validateManualAllocations(db, owner.key, String(payment.tenancy_id), available, requested); if (!resolved.length) throw new ApiError(400, "Choose at least one open charge.");
         const applied = resolved.reduce((sum, allocation) => sum + allocation.amountPaise, 0); const at = now(); const statements: D1PreparedStatement[] = [];
-        for (const allocation of resolved) statements.push(db.prepare("INSERT INTO payment_allocations (id, owner_key, payment_id, charge_type, charge_id, amount_paise, reversed, created_at) VALUES (?, ?, ?, ?, ?, ?, 0, ?) ON CONFLICT(payment_id, charge_type, charge_id) DO UPDATE SET amount_paise=payment_allocations.amount_paise+excluded.amount_paise").bind(id("alloc"), owner.key, paymentId, allocation.chargeType, allocation.chargeId, allocation.amountPaise, at));
+        for (const allocation of resolved) statements.push(db.prepare("INSERT INTO payment_allocations (id, owner_key, payment_id, charge_type, charge_id, amount_paise, reversed, created_at) VALUES (?, ?, ?, ?, ?, ?, 0, ?)").bind(id("alloc"), owner.key, paymentId, allocation.chargeType, allocation.chargeId, allocation.amountPaise, at));
         statements.push(audit(db, owner, "payment.credit_applied", "payment", paymentId, `Applied ${applied} paise of existing credit`)); await db.batch(statements); result = { id: paymentId, appliedPaise: applied, remainingPaise: available - applied }; break;
       }
       case "reverse_payment": {
@@ -308,7 +315,7 @@ export async function POST(request: Request) {
       }
       case "restore_backup": {
         const backup = safeJson(p.backup); const schemaVersion = Number(backup.schemaVersion); const workspace = safeJson(backup.workspace); const records = safeJson(backup.records); const errors: string[] = []; const warnings = ["Private document bytes are not included in structured backups; document metadata will not be restored."];
-        if (schemaVersion !== 4) errors.push("This restore requires a RentFlow schema version 4 backup.");
+        if (![4, 5].includes(schemaVersion)) errors.push("This restore requires a RentFlow schema version 4 or 5 backup.");
         if (String(workspace.id || "") !== owner.key) errors.push("This backup belongs to a different workspace and cannot be restored here.");
         const tableCounts: Record<string, number> = {}; let totalRows = 0;
         for (const table of RESTORE_TABLES) { const source = records[table]; if (source != null && !Array.isArray(source)) errors.push(`${table} must be an array.`); const count = Array.isArray(source) ? source.length : 0; tableCounts[table] = count; totalRows += count; if (Array.isArray(source) && table !== "settings") { const ids = source.map((row) => String(safeJson(row).id || "")).filter(Boolean); if (new Set(ids).size !== ids.length) errors.push(`${table} contains duplicate IDs.`); } }
@@ -357,6 +364,21 @@ export async function POST(request: Request) {
         const landlordName = str(p.landlordName, "Landlord name"); const at = now();
         await db.batch([db.prepare("INSERT INTO settings (owner_key, landlord_name, currency, timezone, date_format, bill_prefix, receipt_prefix, default_rent_due_day, upi_id, payment_instructions, bill_footer, default_electricity_rate_paise, default_electricity_fixed_charge_paise, max_file_size_mb, created_at, updated_at) VALUES (?, ?, 'INR', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(owner_key) DO UPDATE SET landlord_name=excluded.landlord_name, timezone=excluded.timezone, date_format=excluded.date_format, bill_prefix=excluded.bill_prefix, receipt_prefix=excluded.receipt_prefix, default_rent_due_day=excluded.default_rent_due_day, upi_id=excluded.upi_id, payment_instructions=excluded.payment_instructions, bill_footer=excluded.bill_footer, default_electricity_rate_paise=excluded.default_electricity_rate_paise, default_electricity_fixed_charge_paise=excluded.default_electricity_fixed_charge_paise, max_file_size_mb=excluded.max_file_size_mb, updated_at=excluded.updated_at").bind(owner.key, landlordName, str(p.timezone, "Timezone") || "Asia/Kolkata", str(p.dateFormat, "Date format") || "dd MMM yyyy", str(p.billPrefix, "Bill prefix") || "RF-BILL", str(p.receiptPrefix, "Receipt prefix") || "RF-RCPT", int(p.defaultRentDueDay ?? 10, "Default due day", 1, 28), str(p.upiId, "UPI ID"), str(p.paymentInstructions, "Payment instructions"), str(p.billFooter, "Bill footer"), money(p.defaultElectricityRatePaise ?? 0, "Electricity rate", true), money(p.defaultElectricityFixedChargePaise ?? 0, "Fixed charge", true), int(p.maxFileSizeMb ?? 20, "File size", 1, 100), at, at), audit(db, owner, "settings.updated", "settings", owner.key, "Updated billing and payment settings")]); result = { ok: true }; break;
       }
+      case "record_settlement_refund": {
+        const settlementId = str(p.settlementId, "Settlement", true);
+        const settlement = await one<Record<string, unknown>>(db.prepare("SELECT * FROM move_out_settlements WHERE id=? AND owner_key=?").bind(settlementId, owner.key));
+        if (!settlement) throw new ApiError(404, "Settlement not found.");
+        const paid = money(p.amountPaise, "Refund amount");
+        const available = Number(settlement.refund_paise) - Number(settlement.refund_paid_paise || 0);
+        if (paid > available) throw new ApiError(400, "Refund payment exceeds the amount still owed.");
+        const paidAt = isoDate(p.paidAt, "Refund date");
+        await db.batch([
+          db.prepare("UPDATE move_out_settlements SET refund_paid_paise=refund_paid_paise+?, refund_paid_at=? WHERE id=? AND owner_key=?").bind(paid, paidAt, settlementId, owner.key),
+          audit(db, owner, "settlement.refund_paid", "move_out_settlement", settlementId, `Recorded ${paid} paise of refund actually paid`),
+        ]);
+        result = { id: settlementId, refundPaidPaise: Number(settlement.refund_paid_paise || 0) + paid, refundOwedPaise: available - paid };
+        break;
+      }
       case "erase_all": {
         if (p.confirmation !== "DELETE ALL RENTFLOW DATA") throw new ApiError(400, "Type DELETE ALL RENTFLOW DATA exactly to continue.");
         const docs = await rows<{ object_key: string }>(db.prepare("SELECT object_key FROM documents WHERE owner_key=?").bind(owner.key));
@@ -371,11 +393,21 @@ export async function POST(request: Request) {
   } catch (error) { return jsonError(error); }
 }
 
+const ACTION_PERMISSIONS: Record<string, Permission> = {
+  create_property: "records.write", update_property: "records.write", archive_property: "records.write", delete_property: "records.write",
+  create_room: "records.write", update_room: "records.write", archive_room: "records.write", delete_room: "records.write",
+  create_tenant: "records.write", update_tenant: "records.write", activate_tenancy: "records.write", set_notice: "records.write", move_out: "records.write",
+  update_rent_rate: "finance.write", update_electricity_rate: "finance.write", generate_rent: "finance.write", record_electricity: "finance.write", finalize_electricity: "finance.write", create_other_charge: "finance.write", record_payment: "finance.write", apply_payment_credit: "finance.write", reverse_payment: "finance.write", issue_receipt: "finance.write", deposit_transaction: "finance.write", settle_move_out: "finance.write", record_settlement_refund: "refunds.write",
+  create_follow_up: "communications.write", complete_follow_up: "communications.write",
+  create_expense: "expenses.write", mark_expense_paid: "expenses.write", create_recurring_expense: "expenses.write", generate_recurring_expenses: "expenses.write", create_maintenance: "expenses.write", update_maintenance: "expenses.write",
+  replace_meter: "records.write", restore_backup: "security.manage", import_records: "records.write", update_settings: "workspace.manage", erase_all: "records.erase",
+};
+
 function money(value: unknown, label: string, allowZero = false, allowNegative = false) {
   const out = int(value, label); if (!allowNegative && out < 0) throw new ApiError(400, `${label} cannot be negative.`); if (!allowZero && out === 0) throw new ApiError(400, `${label} must be greater than zero.`); return out;
 }
 type RowImport = { type: string; row: Record<string, any> };
-const RESTORE_TABLES = ["properties", "rooms", "tenants", "tenancies", "rent_rate_history", "electricity_rate_history", "rent_charges", "electricity_readings", "electricity_bills", "other_charges", "payments", "payment_allocations", "deposit_ledger", "receipts", "documents", "follow_ups", "expenses", "recurring_expense_templates", "maintenance_issues", "room_availability_history", "meter_events", "move_out_settlements", "settings", "audit_log"];
+const RESTORE_TABLES = ["properties", "rooms", "tenants", "tenancies", "rent_rate_history", "electricity_rate_history", "rent_charges", "electricity_readings", "electricity_bills", "other_charges", "payments", "payment_allocations", "deposit_ledger", "receipts", "documents", "follow_ups", "expenses", "recurring_expense_templates", "maintenance_issues", "room_availability_history", "meter_events", "move_out_settlements", "monthly_closings", "communication_templates", "communication_events", "communication_preferences", "bank_imports", "bank_transactions", "reconciliation_matches", "payment_requests", "inspections", "inspection_items", "lease_renewals", "onboarding_progress", "workspace_subscriptions", "backup_snapshots", "settings", "audit_log"];
 function normalizeImportValue(value: unknown) { if (value == null || typeof value === "string" || typeof value === "number") return value; if (typeof value === "boolean") return value ? 1 : 0; return JSON.stringify(value); }
 function importRupees(value: unknown) {
   if (value == null || String(value).trim() === "") return 0;
@@ -394,6 +426,8 @@ function optionalDate(value: unknown, label: string) { const candidate = str(val
 function enumValue(value: unknown, label: string, allowed: string[], fallback: string) { const candidate = str(value, label) || fallback; if (!allowed.includes(candidate)) throw new ApiError(400, `${label} is invalid.`); return candidate; }
 function monthEnd(billingMonth: string) { const [y, m] = billingMonth.split("-").map(Number); return new Date(Date.UTC(y, m, 0)).toISOString().slice(0, 10); }
 function availabilityStatements(db: D1Database, ownerKey: string, roomId: string, status: string, effectiveFrom: string, reason: string, at: string) { return [db.prepare("UPDATE room_availability_history SET effective_to=date(?, '-1 day') WHERE owner_key=? AND room_id=? AND effective_to IS NULL").bind(effectiveFrom, ownerKey, roomId), db.prepare("INSERT INTO room_availability_history (id, owner_key, room_id, status, effective_from, reason, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)").bind(id("avail"), ownerKey, roomId, status, effectiveFrom, reason, at)]; }
+async function assertFinancialPeriodOpen(db: D1Database, ownerKey: string, billingMonth: string, propertyId: string | null) { const statement = propertyId ? db.prepare("SELECT id FROM monthly_closings WHERE owner_key=? AND billing_month=? AND status='closed' AND (property_id IS NULL OR property_id=?) LIMIT 1").bind(ownerKey, billingMonth, propertyId) : db.prepare("SELECT id FROM monthly_closings WHERE owner_key=? AND billing_month=? AND status='closed' LIMIT 1").bind(ownerKey, billingMonth); if (await one(statement)) throw new ApiError(409, "This month is closed. Reopen it with a recorded reason before changing financial records."); }
+async function assertRoomEntitlement(db: D1Database, ownerKey: string) { const limit = await one<{ room_limit: number }>(db.prepare("SELECT sp.room_limit FROM workspace_subscriptions ws JOIN subscription_plans sp ON sp.id=ws.plan_id WHERE ws.owner_key=? AND ws.status IN ('test','trial','active','grace') LIMIT 1").bind(ownerKey)); if (!limit) return; const count = await one<{ count: number }>(db.prepare("SELECT COUNT(*) count FROM rooms WHERE owner_key=? AND active=1").bind(ownerKey)); if (Number(count?.count || 0) >= Number(limit.room_limit)) throw new ApiError(409, "Your current plan room limit has been reached. Existing financial records remain available."); }
 async function owned(db: D1Database, table: string, entityId: string, ownerKey: string) { const allowed = new Set(["properties", "rooms", "tenants", "tenancies", "payments", "electricity_readings", "documents", "expenses", "maintenance_issues", "follow_ups"]); if (!allowed.has(table)) throw new ApiError(500, "Invalid entity lookup."); const record = await one<Record<string, unknown>>(db.prepare(`SELECT * FROM ${table} WHERE id=? AND owner_key=?`).bind(entityId, ownerKey)); if (!record) throw new ApiError(404, "Record not found."); return record; }
 async function depositBalance(db: D1Database, ownerKey: string, tenancyId: string) { const r = await one<{ balance: number }>(db.prepare("SELECT COALESCE(SUM(CASE WHEN type IN ('received','adjustment') THEN amount_paise ELSE -amount_paise END),0) balance FROM deposit_ledger WHERE owner_key=? AND tenancy_id=?").bind(ownerKey, tenancyId)); return Number(r?.balance ?? 0); }
 

@@ -1,4 +1,5 @@
 import { headers } from "next/headers";
+import { hasPermission, type Permission, type WorkspaceRole } from "../permissions";
 
 type RentFlowBindings = { DB?: D1Database; BUCKET?: R2Bucket };
 
@@ -8,7 +9,7 @@ export type Owner = {
   email: string;
   name: string;
   workspaceName: string;
-  role: "owner";
+  role: WorkspaceRole;
 };
 
 export async function requireOwner(): Promise<Owner> {
@@ -22,17 +23,22 @@ export async function requireOwner(): Promise<Owner> {
   const db = database();
   const at = now();
   const workspaceName = defaultWorkspaceName(name, email);
+  const requestedWorkspace = cookieValue(h.get("cookie") || "", "rentflow_workspace");
   await db.batch([
     db.prepare("INSERT INTO users (id, email, display_name, identity_provider, email_verified_at, status, last_seen_at, created_at, updated_at) VALUES (?, ?, ?, 'chatgpt', ?, 'active', ?, ?, ?) ON CONFLICT(id) DO UPDATE SET email=excluded.email, display_name=excluded.display_name, last_seen_at=excluded.last_seen_at, updated_at=excluded.updated_at").bind(id, email.toLowerCase(), name, at, at, at, at),
     db.prepare("INSERT OR IGNORE INTO workspaces (id, name, created_by_user_id, status, created_at, updated_at) VALUES (?, ?, ?, 'active', ?, ?)").bind(id, workspaceName, id, at, at),
     db.prepare("INSERT OR IGNORE INTO workspace_memberships (id, workspace_id, user_id, role, status, created_at, updated_at) VALUES (?, ?, ?, 'owner', 'active', ?, ?)").bind(`membership_${id}`, id, id, at, at),
     db.prepare("INSERT OR IGNORE INTO audit_log (id, owner_key, action, entity_type, entity_id, summary, actor_context, created_at) VALUES (?, ?, 'account.workspace_created', 'workspace', ?, 'Created landlord workspace', ?, ?)").bind(`audit_workspace_${id}`, id, id, email, at),
   ]);
-  const membership = await one<{ workspace_id: string; workspace_name: string; role: string }>(
-    db.prepare("SELECT wm.workspace_id, w.name AS workspace_name, wm.role FROM workspace_memberships wm JOIN workspaces w ON w.id=wm.workspace_id WHERE wm.user_id=? AND wm.status='active' AND w.status='active' ORDER BY CASE wm.role WHEN 'owner' THEN 0 ELSE 1 END, wm.created_at LIMIT 1").bind(id),
-  );
-  if (!membership || membership.role !== "owner") throw new ApiError(403, "Your landlord workspace is unavailable.");
-  return { key: membership.workspace_id, userKey: id, email, name, workspaceName: membership.workspace_name, role: "owner" };
+  const membership = await one<{ workspace_id: string; workspace_name: string; role: string }>(requestedWorkspace
+    ? db.prepare("SELECT wm.workspace_id, w.name AS workspace_name, wm.role FROM workspace_memberships wm JOIN workspaces w ON w.id=wm.workspace_id WHERE wm.user_id=? AND wm.workspace_id=? AND wm.status='active' AND w.status='active' LIMIT 1").bind(id, requestedWorkspace)
+    : db.prepare("SELECT wm.workspace_id, w.name AS workspace_name, wm.role FROM workspace_memberships wm JOIN workspaces w ON w.id=wm.workspace_id WHERE wm.user_id=? AND wm.status='active' AND w.status='active' ORDER BY CASE wm.role WHEN 'owner' THEN 0 ELSE 1 END, wm.created_at LIMIT 1").bind(id));
+  if (!membership || !["owner", "manager", "accountant", "read_only"].includes(membership.role)) throw new ApiError(403, "Your landlord workspace is unavailable.");
+  return { key: membership.workspace_id, userKey: id, email, name, workspaceName: membership.workspace_name, role: membership.role as WorkspaceRole };
+}
+
+export function requirePermission(owner: Owner, permission: Permission) {
+  if (!hasPermission(owner.role, permission)) throw new ApiError(403, "Your workspace role does not allow this action.");
 }
 
 export function database(): D1Database {
@@ -88,6 +94,7 @@ export function month(value: unknown) {
 }
 export function safeJson(value: unknown) { return value == null ? {} : value as Record<string, unknown>; }
 function safeDecode(value: string) { try { return decodeURIComponent(value); } catch { return null; } }
+function cookieValue(cookie: string, name: string) { const prefix = `${name}=`; const part = cookie.split(";").map((item) => item.trim()).find((item) => item.startsWith(prefix)); return part ? safeDecode(part.slice(prefix.length)) : null; }
 
 export async function one<T = Record<string, unknown>>(stmt: D1PreparedStatement) {
   return (await stmt.first<T>()) ?? null;

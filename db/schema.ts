@@ -116,7 +116,7 @@ export const payments = sqliteTable("payments", {
 export const paymentAllocations = sqliteTable("payment_allocations", {
   id: text("id").primaryKey(), ownerKey: text("owner_key").notNull(), paymentId: text("payment_id").notNull(),
   chargeType: text("charge_type").notNull(), chargeId: text("charge_id").notNull(), amountPaise: integer("amount_paise").notNull(), reversed: integer("reversed").notNull().default(0), reversedAt: text("reversed_at"), createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
-}, (t) => [index("idx_allocations_payment").on(t.paymentId), index("idx_allocations_charge").on(t.chargeType, t.chargeId), uniqueIndex("uq_allocation_payment_charge").on(t.paymentId, t.chargeType, t.chargeId)]);
+}, (t) => [index("idx_allocations_payment").on(t.paymentId), index("idx_allocations_charge").on(t.chargeType, t.chargeId)]);
 
 export const depositLedger = sqliteTable("deposit_ledger", {
   id: text("id").primaryKey(), ownerKey: text("owner_key").notNull(), tenancyId: text("tenancy_id").notNull(),
@@ -167,5 +167,73 @@ export const meterEvents = sqliteTable("meter_events", {
 }, (t) => [index("idx_meter_events_tenancy_date").on(t.tenancyId, t.eventDate)]);
 
 export const moveOutSettlements = sqliteTable("move_out_settlements", {
-  id: text("id").primaryKey(), ownerKey: text("owner_key").notNull(), tenancyId: text("tenancy_id").notNull(), settlementDate: text("settlement_date").notNull(), outstandingPaise: integer("outstanding_paise").notNull(), creditPaise: integer("credit_paise").notNull().default(0), depositHeldPaise: integer("deposit_held_paise").notNull().default(0), deductionPaise: integer("deduction_paise").notNull().default(0), refundPaise: integer("refund_paise").notNull().default(0), remainingDebtPaise: integer("remaining_debt_paise").notNull().default(0), notes: text("notes").notNull().default(""), snapshotJson: text("snapshot_json").notNull(), createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  id: text("id").primaryKey(), ownerKey: text("owner_key").notNull(), tenancyId: text("tenancy_id").notNull(), settlementDate: text("settlement_date").notNull(), outstandingPaise: integer("outstanding_paise").notNull(), creditPaise: integer("credit_paise").notNull().default(0), depositHeldPaise: integer("deposit_held_paise").notNull().default(0), deductionPaise: integer("deduction_paise").notNull().default(0), refundPaise: integer("refund_paise").notNull().default(0), refundPaidPaise: integer("refund_paid_paise").notNull().default(0), refundPaidAt: text("refund_paid_at"), remainingDebtPaise: integer("remaining_debt_paise").notNull().default(0), notes: text("notes").notNull().default(""), snapshotJson: text("snapshot_json").notNull(), createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
 }, (t) => [uniqueIndex("uq_moveout_settlement_tenancy").on(t.tenancyId), index("idx_settlements_owner_date").on(t.ownerKey, t.settlementDate)]);
+
+export const operationRequests = sqliteTable("operation_requests", {
+  id: text("id").primaryKey(), ownerKey: text("owner_key").notNull(), requestKey: text("request_key").notNull(), action: text("action").notNull(), responseJson: text("response_json").notNull().default("{}"), completedAt: text("completed_at").notNull(), createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+}, (t) => [uniqueIndex("uq_operation_request").on(t.ownerKey, t.requestKey), index("idx_operation_requests_owner").on(t.ownerKey, t.createdAt)]);
+
+export const monthlyClosings = sqliteTable("monthly_closings", {
+  id: text("id").primaryKey(), ownerKey: text("owner_key").notNull(), propertyId: text("property_id"), billingMonth: text("billing_month").notNull(), status: text("status").notNull().default("draft"), exceptionReason: text("exception_reason").notNull().default(""), snapshotJson: text("snapshot_json").notNull().default("{}"), reviewedAt: text("reviewed_at"), closedAt: text("closed_at"), reopenedAt: text("reopened_at"), reopenedReason: text("reopened_reason").notNull().default(""), ...timestamps,
+}, (t) => [uniqueIndex("uq_monthly_closing_scope").on(t.ownerKey, t.propertyId, t.billingMonth), index("idx_monthly_closings_owner_month").on(t.ownerKey, t.billingMonth)]);
+
+export const communicationTemplates = sqliteTable("communication_templates", {
+  id: text("id").primaryKey(), ownerKey: text("owner_key").notNull(), kind: text("kind").notNull(), name: text("name").notNull(), body: text("body").notNull(), active: integer("active").notNull().default(1), ...timestamps,
+}, (t) => [uniqueIndex("uq_communication_template_kind").on(t.ownerKey, t.kind)]);
+
+export const communicationEvents = sqliteTable("communication_events", {
+  id: text("id").primaryKey(), ownerKey: text("owner_key").notNull(), tenantId: text("tenant_id").notNull(), tenancyId: text("tenancy_id"), templateKind: text("template_kind").notNull(), channel: text("channel").notNull(), recipient: text("recipient").notNull(), messageSnapshot: text("message_snapshot").notNull(), status: text("status").notNull().default("prepared"), providerMessageId: text("provider_message_id"), nextFollowUpDate: text("next_follow_up_date"), promisedPaymentDate: text("promised_payment_date"), createdByUserId: text("created_by_user_id").notNull(), ...timestamps,
+}, (t) => [index("idx_communication_tenant").on(t.ownerKey, t.tenantId, t.createdAt)]);
+
+export const communicationPreferences = sqliteTable("communication_preferences", {
+  id: text("id").primaryKey(), ownerKey: text("owner_key").notNull(), tenantId: text("tenant_id").notNull(), channel: text("channel").notNull(), optedOut: integer("opted_out").notNull().default(0), reason: text("reason").notNull().default(""), ...timestamps,
+}, (t) => [uniqueIndex("uq_communication_preference").on(t.ownerKey, t.tenantId, t.channel)]);
+
+export const bankImports = sqliteTable("bank_imports", {
+  id: text("id").primaryKey(), ownerKey: text("owner_key").notNull(), filename: text("filename").notNull(), fileHash: text("file_hash").notNull(), mappingJson: text("mapping_json").notNull(), rowCount: integer("row_count").notNull(), importedAt: text("imported_at").notNull(), ...timestamps,
+}, (t) => [uniqueIndex("uq_bank_import_hash").on(t.ownerKey, t.fileHash)]);
+
+export const bankTransactions = sqliteTable("bank_transactions", {
+  id: text("id").primaryKey(), ownerKey: text("owner_key").notNull(), importId: text("import_id").notNull(), transactionDate: text("transaction_date").notNull(), amountPaise: integer("amount_paise").notNull(), direction: text("direction").notNull(), description: text("description").notNull(), reference: text("reference").notNull().default(""), fingerprint: text("fingerprint").notNull(), status: text("status").notNull().default("unmatched"), version: integer("version").notNull().default(1), ...timestamps,
+}, (t) => [uniqueIndex("uq_bank_transaction_fingerprint").on(t.ownerKey, t.fingerprint), index("idx_bank_transactions_inbox").on(t.ownerKey, t.status, t.transactionDate)]);
+
+export const reconciliationMatches = sqliteTable("reconciliation_matches", {
+  id: text("id").primaryKey(), ownerKey: text("owner_key").notNull(), bankTransactionId: text("bank_transaction_id").notNull(), paymentId: text("payment_id"), expenseId: text("expense_id"), depositLedgerId: text("deposit_ledger_id"), matchType: text("match_type").notNull(), evidenceJson: text("evidence_json").notNull().default("{}"), createdPayment: integer("created_payment").notNull().default(0), reversedAt: text("reversed_at"), reversalReason: text("reversal_reason"), ...timestamps,
+}, (t) => [index("idx_reconciliation_transaction").on(t.ownerKey, t.bankTransactionId, t.createdAt)]);
+
+export const paymentRequests = sqliteTable("payment_requests", {
+  id: text("id").primaryKey(), ownerKey: text("owner_key").notNull(), tenancyId: text("tenancy_id").notNull(), tenantId: text("tenant_id").notNull(), amountPaise: integer("amount_paise").notNull(), reference: text("reference").notNull(), expiresAt: text("expires_at").notNull(), status: text("status").notNull().default("pending"), upiUri: text("upi_uri").notNull().default(""), provider: text("provider").notNull().default("manual_upi"), providerRequestId: text("provider_request_id"), confirmedPaymentId: text("confirmed_payment_id"), requestKey: text("request_key").notNull(), ...timestamps,
+}, (t) => [uniqueIndex("uq_payment_request_key").on(t.ownerKey, t.requestKey), index("idx_payment_requests_tenancy").on(t.ownerKey, t.tenancyId, t.createdAt)]);
+
+export const inspections = sqliteTable("inspections", {
+  id: text("id").primaryKey(), ownerKey: text("owner_key").notNull(), propertyId: text("property_id").notNull(), roomId: text("room_id").notNull(), tenantId: text("tenant_id"), tenancyId: text("tenancy_id"), inspectionType: text("inspection_type").notNull(), inspectionDate: text("inspection_date").notNull(), status: text("status").notNull().default("draft"), meterNumber: text("meter_number").notNull().default(""), meterReading: real("meter_reading"), keysJson: text("keys_json").notNull().default("[]"), notes: text("notes").notNull().default(""), acknowledgementStatus: text("acknowledgement_status").notNull().default("pending"), snapshotJson: text("snapshot_json").notNull().default("{}"), ...timestamps,
+}, (t) => [index("idx_inspections_room_date").on(t.ownerKey, t.roomId, t.inspectionDate)]);
+
+export const inspectionItems = sqliteTable("inspection_items", {
+  id: text("id").primaryKey(), ownerKey: text("owner_key").notNull(), inspectionId: text("inspection_id").notNull(), area: text("area").notNull(), itemName: text("item_name").notNull(), condition: text("condition").notNull(), existingDamage: integer("existing_damage").notNull().default(0), description: text("description").notNull().default(""), photoDocumentId: text("photo_document_id"), proposedDeductionPaise: integer("proposed_deduction_paise").notNull().default(0), deductionStatus: text("deduction_status").notNull().default("proposed"), createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+}, (t) => [index("idx_inspection_items_inspection").on(t.ownerKey, t.inspectionId)]);
+
+export const leaseRenewals = sqliteTable("lease_renewals", {
+  id: text("id").primaryKey(), ownerKey: text("owner_key").notNull(), tenancyId: text("tenancy_id").notNull(), proposedRentPaise: integer("proposed_rent_paise").notNull(), proposedDepositPaise: integer("proposed_deposit_paise").notNull().default(0), proposedStartDate: text("proposed_start_date").notNull(), proposedEndDate: text("proposed_end_date"), noticeTerms: text("notice_terms").notNull().default(""), status: text("status").notNull().default("draft"), tenantResponse: text("tenant_response").notNull().default(""), acceptedAt: text("accepted_at"), approvedAt: text("approved_at"), agreementDocumentId: text("agreement_document_id"), ...timestamps,
+}, (t) => [index("idx_renewals_tenancy_status").on(t.ownerKey, t.tenancyId, t.status)]);
+
+export const workspaceInvitations = sqliteTable("workspace_invitations", {
+  id: text("id").primaryKey(), ownerKey: text("owner_key").notNull(), email: text("email").notNull(), role: text("role").notNull(), tokenHash: text("token_hash").notNull(), status: text("status").notNull().default("pending"), expiresAt: text("expires_at").notNull(), invitedByUserId: text("invited_by_user_id").notNull(), acceptedByUserId: text("accepted_by_user_id"), acceptedAt: text("accepted_at"), ...timestamps,
+}, (t) => [uniqueIndex("uq_workspace_invitation_token").on(t.tokenHash), index("idx_workspace_invitations_email").on(t.email, t.status)]);
+
+export const onboardingProgress = sqliteTable("onboarding_progress", {
+  ownerKey: text("owner_key").primaryKey(), currentStep: integer("current_step").notNull().default(1), completedStepsJson: text("completed_steps_json").notNull().default("[]"), dismissedAt: text("dismissed_at"), ...timestamps,
+});
+
+export const subscriptionPlans = sqliteTable("subscription_plans", {
+  id: text("id").primaryKey(), name: text("name").notNull(), roomLimit: integer("room_limit").notNull(), featuresJson: text("features_json").notNull().default("[]"), pricePaise: integer("price_paise"), active: integer("active").notNull().default(1), ...timestamps,
+});
+
+export const workspaceSubscriptions = sqliteTable("workspace_subscriptions", {
+  id: text("id").primaryKey(), ownerKey: text("owner_key").notNull(), planId: text("plan_id").notNull(), status: text("status").notNull().default("trial"), trialEndsAt: text("trial_ends_at"), currentPeriodEnd: text("current_period_end"), provider: text("provider").notNull().default("test"), providerCustomerId: text("provider_customer_id"), providerSubscriptionId: text("provider_subscription_id"), graceEndsAt: text("grace_ends_at"), ...timestamps,
+}, (t) => [uniqueIndex("uq_workspace_subscription").on(t.ownerKey)]);
+
+export const backupSnapshots = sqliteTable("backup_snapshots", {
+  id: text("id").primaryKey(), ownerKey: text("owner_key").notNull(), backupType: text("backup_type").notNull(), status: text("status").notNull().default("verified"), schemaVersion: integer("schema_version").notNull(), recordCount: integer("record_count").notNull(), documentCount: integer("document_count").notNull().default(0), checksum: text("checksum").notNull(), objectKey: text("object_key"), verificationJson: text("verification_json").notNull().default("{}"), createdByUserId: text("created_by_user_id").notNull(), verifiedAt: text("verified_at"), createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+}, (t) => [index("idx_backups_owner_created").on(t.ownerKey, t.createdAt)]);
