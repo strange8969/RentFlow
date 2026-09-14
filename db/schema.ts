@@ -53,6 +53,7 @@ export const rooms = sqliteTable("rooms", {
   roomNumber: text("room_number").notNull(), normalizedRoomNumber: text("normalized_room_number").notNull(),
   floor: text("floor").notNull().default(""), meterNumber: text("meter_number").notNull().default(""),
   status: text("status").notNull().default("vacant"), notes: text("notes").notNull().default(""),
+  askingRentPaise: integer("asking_rent_paise").notNull().default(0),
   active: integer("active").notNull().default(1), ...timestamps,
 }, (t) => [uniqueIndex("uq_rooms_property_number").on(t.ownerKey, t.propertyId, t.normalizedRoomNumber), index("idx_rooms_owner_property").on(t.ownerKey, t.propertyId)]);
 
@@ -70,6 +71,7 @@ export const tenancies = sqliteTable("tenancies", {
   moveInDate: text("move_in_date").notNull(), rentStartDate: text("rent_start_date").notNull(), moveOutDate: text("move_out_date"), noticeDate: text("notice_date"),
   rentDueDay: integer("rent_due_day").notNull(), securityDepositRequiredPaise: integer("security_deposit_required_paise").notNull().default(0),
   openingBalancePaise: integer("opening_balance_paise").notNull().default(0), initialMeterReading: real("initial_meter_reading"),
+  rentProrationMode: text("rent_proration_mode").notNull().default("full_month"), agreementEndDate: text("agreement_end_date"), plannedMoveOutDate: text("planned_move_out_date"),
   status: text("status").notNull().default("active"), ...timestamps,
 }, (t) => [index("idx_tenancies_owner_status").on(t.ownerKey, t.status), index("idx_tenancies_room_status").on(t.roomId, t.status), index("idx_tenancies_tenant").on(t.tenantId), uniqueIndex("uq_active_tenancy_room").on(t.ownerKey, t.roomId).where(sql`${t.status} IN ('active','notice')`)]);
 
@@ -108,13 +110,13 @@ export const otherCharges = sqliteTable("other_charges", {
 
 export const payments = sqliteTable("payments", {
   id: text("id").primaryKey(), ownerKey: text("owner_key").notNull(), tenancyId: text("tenancy_id").notNull(), tenantId: text("tenant_id").notNull(),
-  amountPaise: integer("amount_paise").notNull(), paymentDate: text("payment_date").notNull(), mode: text("mode").notNull(), reference: text("reference").notNull().default(""), notes: text("notes").notNull().default(""), proofDocumentId: text("proof_document_id"), status: text("status").notNull().default("recorded"), reversedAt: text("reversed_at"), reversalReason: text("reversal_reason"), ...timestamps,
-}, (t) => [index("idx_payments_owner_date").on(t.ownerKey, t.paymentDate), index("idx_payments_tenancy").on(t.tenancyId)]);
+  amountPaise: integer("amount_paise").notNull(), paymentDate: text("payment_date").notNull(), mode: text("mode").notNull(), reference: text("reference").notNull().default(""), notes: text("notes").notNull().default(""), proofDocumentId: text("proof_document_id"), requestKey: text("request_key"), status: text("status").notNull().default("recorded"), reversedAt: text("reversed_at"), reversalReason: text("reversal_reason"), ...timestamps,
+}, (t) => [index("idx_payments_owner_date").on(t.ownerKey, t.paymentDate), index("idx_payments_tenancy").on(t.tenancyId), uniqueIndex("uq_payments_owner_request").on(t.ownerKey, t.requestKey)]);
 
 export const paymentAllocations = sqliteTable("payment_allocations", {
   id: text("id").primaryKey(), ownerKey: text("owner_key").notNull(), paymentId: text("payment_id").notNull(),
-  chargeType: text("charge_type").notNull(), chargeId: text("charge_id").notNull(), amountPaise: integer("amount_paise").notNull(), reversed: integer("reversed").notNull().default(0), createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
-}, (t) => [index("idx_allocations_payment").on(t.paymentId), index("idx_allocations_charge").on(t.chargeType, t.chargeId)]);
+  chargeType: text("charge_type").notNull(), chargeId: text("charge_id").notNull(), amountPaise: integer("amount_paise").notNull(), reversed: integer("reversed").notNull().default(0), reversedAt: text("reversed_at"), createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+}, (t) => [index("idx_allocations_payment").on(t.paymentId), index("idx_allocations_charge").on(t.chargeType, t.chargeId), uniqueIndex("uq_allocation_payment_charge").on(t.paymentId, t.chargeType, t.chargeId)]);
 
 export const depositLedger = sqliteTable("deposit_ledger", {
   id: text("id").primaryKey(), ownerKey: text("owner_key").notNull(), tenancyId: text("tenancy_id").notNull(),
@@ -137,3 +139,33 @@ export const settings = sqliteTable("settings", {
 export const auditLog = sqliteTable("audit_log", {
   id: text("id").primaryKey(), ownerKey: text("owner_key").notNull(), action: text("action").notNull(), entityType: text("entity_type"), entityId: text("entity_id"), summary: text("summary").notNull(), actorContext: text("actor_context").notNull().default("owner"), createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
 }, (t) => [index("idx_audit_owner_created").on(t.ownerKey, t.createdAt)]);
+
+export const followUps = sqliteTable("follow_ups", {
+  id: text("id").primaryKey(), ownerKey: text("owner_key").notNull(), tenantId: text("tenant_id").notNull(), tenancyId: text("tenancy_id"),
+  note: text("note").notNull(), nextFollowUpDate: text("next_follow_up_date"), promisedPaymentDate: text("promised_payment_date"), status: text("status").notNull().default("open"), reminderDraft: text("reminder_draft").notNull().default(""), completedAt: text("completed_at"), ...timestamps,
+}, (t) => [index("idx_followups_owner_date").on(t.ownerKey, t.status, t.nextFollowUpDate), index("idx_followups_tenant").on(t.tenantId, t.createdAt)]);
+
+export const expenses = sqliteTable("expenses", {
+  id: text("id").primaryKey(), ownerKey: text("owner_key").notNull(), propertyId: text("property_id").notNull(), roomId: text("room_id"),
+  category: text("category").notNull(), description: text("description").notNull(), amountPaise: integer("amount_paise").notNull(), incurredDate: text("incurred_date").notNull(), paidDate: text("paid_date"), payee: text("payee").notNull().default(""), paymentStatus: text("payment_status").notNull().default("unpaid"), documentId: text("document_id"), recurringTemplateId: text("recurring_template_id"), ...timestamps,
+}, (t) => [index("idx_expenses_owner_date").on(t.ownerKey, t.incurredDate), index("idx_expenses_property").on(t.propertyId, t.incurredDate)]);
+
+export const recurringExpenseTemplates = sqliteTable("recurring_expense_templates", {
+  id: text("id").primaryKey(), ownerKey: text("owner_key").notNull(), propertyId: text("property_id").notNull(), roomId: text("room_id"), category: text("category").notNull(), description: text("description").notNull(), amountPaise: integer("amount_paise").notNull(), payee: text("payee").notNull().default(""), dayOfMonth: integer("day_of_month").notNull().default(1), active: integer("active").notNull().default(1), ...timestamps,
+}, (t) => [index("idx_recurring_expenses_owner").on(t.ownerKey, t.active)]);
+
+export const maintenanceIssues = sqliteTable("maintenance_issues", {
+  id: text("id").primaryKey(), ownerKey: text("owner_key").notNull(), propertyId: text("property_id").notNull(), roomId: text("room_id"), title: text("title").notNull(), description: text("description").notNull().default(""), priority: text("priority").notNull().default("normal"), status: text("status").notNull().default("open"), reportedDate: text("reported_date").notNull(), dueDate: text("due_date"), completedDate: text("completed_date"), assignedTo: text("assigned_to").notNull().default(""), estimatedCostPaise: integer("estimated_cost_paise").notNull().default(0), actualCostPaise: integer("actual_cost_paise").notNull().default(0), expenseId: text("expense_id"), documentId: text("document_id"), ...timestamps,
+}, (t) => [index("idx_maintenance_owner_status").on(t.ownerKey, t.status, t.dueDate)]);
+
+export const roomAvailabilityHistory = sqliteTable("room_availability_history", {
+  id: text("id").primaryKey(), ownerKey: text("owner_key").notNull(), roomId: text("room_id").notNull(), status: text("status").notNull(), effectiveFrom: text("effective_from").notNull(), effectiveTo: text("effective_to"), reason: text("reason").notNull().default(""), createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+}, (t) => [index("idx_room_availability_period").on(t.ownerKey, t.roomId, t.effectiveFrom)]);
+
+export const meterEvents = sqliteTable("meter_events", {
+  id: text("id").primaryKey(), ownerKey: text("owner_key").notNull(), tenancyId: text("tenancy_id").notNull(), roomId: text("room_id").notNull(), eventDate: text("event_date").notNull(), oldMeterNumber: text("old_meter_number").notNull().default(""), newMeterNumber: text("new_meter_number").notNull(), oldFinalReading: real("old_final_reading").notNull(), newInitialReading: real("new_initial_reading").notNull(), reason: text("reason").notNull(), photoDocumentId: text("photo_document_id"), createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+}, (t) => [index("idx_meter_events_tenancy_date").on(t.tenancyId, t.eventDate)]);
+
+export const moveOutSettlements = sqliteTable("move_out_settlements", {
+  id: text("id").primaryKey(), ownerKey: text("owner_key").notNull(), tenancyId: text("tenancy_id").notNull(), settlementDate: text("settlement_date").notNull(), outstandingPaise: integer("outstanding_paise").notNull(), creditPaise: integer("credit_paise").notNull().default(0), depositHeldPaise: integer("deposit_held_paise").notNull().default(0), deductionPaise: integer("deduction_paise").notNull().default(0), refundPaise: integer("refund_paise").notNull().default(0), remainingDebtPaise: integer("remaining_debt_paise").notNull().default(0), notes: text("notes").notNull().default(""), snapshotJson: text("snapshot_json").notNull(), createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+}, (t) => [uniqueIndex("uq_moveout_settlement_tenancy").on(t.tenancyId), index("idx_settlements_owner_date").on(t.ownerKey, t.settlementDate)]);
